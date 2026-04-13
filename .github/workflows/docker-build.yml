@@ -1,9 +1,5 @@
 name: Build and Push Docker Images
 
-# 触发条件：
-# 1. 推送到 main 分支 (构建 latest 标签)
-# 2. 创建以 'v' 开头的 Tag (例如 v1.0.0，构建版本号标签)
-# 3. 修改了 Dockerfile 或 packages 目录下的文件时触发
 on:
   push:
     branches: [ "main" ]
@@ -16,7 +12,24 @@ on:
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
 
-# 权限设置：允许推送到 GitHub Container Registry (ghcr.io)
+  workflow_dispatch:
+    inputs:
+      custom_tag:
+        description: '自定义镜像标签 (例如: test-build)'
+        required: false
+        default: 'manual'
+        type: string
+      target_image:
+        description: '选择要构建的镜像'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - happy-standalone
+          - happy-server
+          - happy-webapp
+
 permissions:
   contents: read
   packages: write
@@ -24,22 +37,18 @@ permissions:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # ❌ 删除了这里的 if 判断，因为 job 层级无法读取 matrix
     
-    # 矩阵策略：定义三个不同的构建任务
     strategy:
-      fail-fast: false # 如果其中一个镜像构建失败，不会取消其他镜像的构建
+      fail-fast: false
       matrix:
         include:
-          # 任务1：单机版
           - dockerfile: Dockerfile
             image_name: happy-standalone
-          # 任务2：标准后端版
           - dockerfile: Dockerfile.server
             image_name: happy-server
-          # 任务3：Web 前端版 (需要传入前端构建参数)
           - dockerfile: Dockerfile.webapp
             image_name: happy-webapp
-            # 这里的变量会在构建时传入 Dockerfile
             # build_args: |
             #   POSTHOG_API_KEY=${{ secrets.POSTHOG_API_KEY }}
             #   REVENUE_CAT_STRIPE=${{ secrets.REVENUE_CAT_STRIPE }}
@@ -48,24 +57,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 安装 QEMU 用于跨平台构建（如果不需要 arm 架构可以注释掉以加快速度）
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      # 设置 Docker Buildx（支持多架构和高级缓存）
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 登录到 GitHub 官方镜像仓库
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }} # GitHub 自动提供的密钥，无需手动配置
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 自动提取标签和注解 (例如: latest, v1.0.0, sha-xxxxxxx)
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -76,20 +81,22 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
+            type=raw,value=${{ github.event.inputs.custom_tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
-      # 核心构建与推送步骤
+      # ✅ 将判断逻辑移到了具体的 step 中
       - name: Build and push Docker image
+        if: >-
+          github.event_name != 'workflow_dispatch' ||
+          github.event.inputs.target_image == 'all' ||
+          matrix.image_name == github.event.inputs.target_image
         uses: docker/build-push-action@v5
         with:
-          context: . # 因为 Dockerfile 都在根目录，构建上下文是项目根目录
-          file: ./${{ matrix.dockerfile }} # 动态选择 Dockerfile
-          push: ${{ github.event_name != 'pull_request' }} # 只有非 PR 事件才推送
+          context: .
+          file: ./${{ matrix.dockerfile }}
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # 启用 GitHub Actions 缓存，极大提升二次构建速度
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # 如果矩阵中定义了 build_args，则传入（用于 webapp）
           build-args: ${{ matrix.build_args }}
-          # 如果需要支持苹果M芯片(arm64)等架构，取消下面这行注释
           # platforms: linux/amd64,linux/arm64
