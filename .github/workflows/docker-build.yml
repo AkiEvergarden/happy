@@ -40,9 +40,9 @@ jobs:
           - dockerfile: Dockerfile.webapp
             image_name: happy-webapp
             # 这里的变量会在构建时传入 Dockerfile
-            build_args: |
-              POSTHOG_API_KEY=${{ secrets.POSTHOG_API_KEY }}
-              REVENUE_CAT_STRIPE=${{ secrets.REVENUE_CAT_STRIPE }}
+            # build_args: |
+            #   POSTHOG_API_KEY=${{ secrets.POSTHOG_API_KEY }}
+            #   REVENUE_CAT_STRIPE=${{ secrets.REVENUE_CAT_STRIPE }}
 
     steps:
       - name: Checkout repository
